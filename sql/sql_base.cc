@@ -378,6 +378,10 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
   if (!wait_for_refresh)
     DBUG_RETURN(result);
 
+  /*
+    It's enough to check for locked_tables_mode here as if one has locked tables
+    than one can not flush any tables that was not handled above
+  */
   if (thd->locked_tables_mode)
   {
     /*
@@ -415,21 +419,16 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
       close_all_tables_for_name(thd, table->s, HA_EXTRA_NOT_USED, NULL);
     }
   }
-
-  DBUG_PRINT("info", ("Waiting for other threads to close their open tables"));
-  DEBUG_SYNC(thd, "after_flush_unlock");
-
-  /*
-    It's enough to check for locked_tables_mode here as if one has locked tables
-    than one can not flush any tables that was not handled above
-  */
-  if (!thd->locked_tables_mode)
+  else
   {
     /*
       Get an explicit MDL lock for all requested tables to ensure they are
       not used by any other thread
     */
     MDL_request_list mdl_requests;
+
+    DBUG_PRINT("info", ("Waiting for other threads to close their open tables"));
+    DEBUG_SYNC(thd, "after_flush_unlock");
 
     /* close open HANDLER for this thread to allow table to be closed */
     mysql_ha_flush_tables(thd, tables);
