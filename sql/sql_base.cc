@@ -350,7 +350,6 @@ void purge_tables(bool purge_flag)
 bool close_cached_tables(THD *thd, TABLE_LIST *tables,
                          bool wait_for_refresh, ulong timeout)
 {
-  bool result= FALSE;
   DBUG_ENTER("close_cached_tables");
   DBUG_ASSERT(thd || (!wait_for_refresh && !tables));
 
@@ -376,7 +375,7 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
                       (int) tdc_records()));
 
   if (!wait_for_refresh)
-    DBUG_RETURN(result);
+    DBUG_RETURN(false);
 
   /*
     It's enough to check for locked_tables_mode here as if one has locked tables
@@ -392,6 +391,7 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
     */
     TABLE_LIST *tables_to_reopen= (tables ? tables :
                                   thd->locked_tables_list.locked_tables());
+    bool result= false;
 
     /* close open HANDLER for this thread to allow table to be closed */
     mysql_ha_flush_tables(thd, tables);
@@ -411,7 +411,7 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
       if (wait_while_table_is_used(thd, table,
                                    HA_EXTRA_PREPARE_FOR_FORCED_CLOSE))
       {
-        result= TRUE;
+        result= true;
         break;
       }
       /* Force table to be removed from table cache */
@@ -433,8 +433,10 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
     */
     for (TABLE *tab= thd->open_tables; tab; tab= tab->next)
       tab->mdl_ticket->downgrade_lock(MDL_SHARED_NO_READ_WRITE);
+
+    DBUG_RETURN(result);
   }
-  else
+  else if (tables)
   {
     /*
       Get an explicit MDL lock for all requested tables to ensure they are
@@ -450,21 +452,15 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
 
     for (TABLE_LIST *table= tables; table; table= table->next_local)
     {
-      if (thd->killed)
-        break;
-      MDL_request *schema_request= new (thd->mem_root) MDL_request;
-      if (schema_request == NULL)
-      {
-        result= TRUE;
-        goto end;
-      }
-      schema_request->init(&table->mdl_request.key, MDL_EXCLUSIVE,
-                           MDL_STATEMENT);
-      mdl_requests.push_front(schema_request);
+      MDL_request *mdl_request= new (thd->mem_root) MDL_request;
+      if (mdl_request == NULL)
+        DBUG_RETURN(true);
+      mdl_request->init(&table->mdl_request.key, MDL_EXCLUSIVE, MDL_STATEMENT);
+      mdl_requests.push_front(mdl_request);
     }
 
     if (thd->mdl_context.acquire_locks(&mdl_requests, timeout))
-      result= TRUE;
+      DBUG_RETURN(true);
 
     /*
       Free not used shares. Needed to ensure that above tables will be
@@ -472,9 +468,7 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
     */
     tdc_purge(true);
   }
-
-end:
-  DBUG_RETURN(result);
+  DBUG_RETURN(false);
 }
 
 
