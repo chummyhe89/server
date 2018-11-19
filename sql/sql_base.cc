@@ -412,12 +412,27 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
                                    HA_EXTRA_PREPARE_FOR_FORCED_CLOSE))
       {
         result= TRUE;
-        goto err_with_reopen;
+        break;
       }
       /* Force table to be removed from table cache */
       table->s->tdc->flushed= true;
       close_all_tables_for_name(thd, table->s, HA_EXTRA_NOT_USED, NULL);
     }
+    /*
+      No other thread has the locked tables open; reopen them and get the
+      old locks. This should always succeed (unless some external process
+      has removed the tables)
+    */
+    if (thd->locked_tables_list.reopen_tables(thd, false))
+      result= true;
+
+    /*
+      Since downgrade_lock() won't do anything with shared
+      metadata lock it is much simpler to go through all open tables rather
+      than picking only those tables that were flushed.
+    */
+    for (TABLE *tab= thd->open_tables; tab; tab= tab->next)
+      tab->mdl_ticket->downgrade_lock(MDL_SHARED_NO_READ_WRITE);
   }
   else
   {
@@ -458,25 +473,6 @@ bool close_cached_tables(THD *thd, TABLE_LIST *tables,
     tdc_purge(true);
   }
 
-err_with_reopen:
-  if (thd->locked_tables_mode)
-  {
-    /*
-      No other thread has the locked tables open; reopen them and get the
-      old locks. This should always succeed (unless some external process
-      has removed the tables)
-    */
-    if (thd->locked_tables_list.reopen_tables(thd, false))
-      result= true;
-
-    /*
-      Since downgrade_lock() won't do anything with shared
-      metadata lock it is much simpler to go through all open tables rather
-      than picking only those tables that were flushed.
-    */
-    for (TABLE *tab= thd->open_tables; tab; tab= tab->next)
-      tab->mdl_ticket->downgrade_lock(MDL_SHARED_NO_READ_WRITE);
-  }
 end:
   DBUG_RETURN(result);
 }
